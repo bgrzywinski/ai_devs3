@@ -88,7 +88,6 @@ const correctedFragments = await Promise.all(
 
 // Łączenie wyników
 const correctedQuestions = correctedFragments.flat();
-
 // Zapisanie poprawionego pliku
 const correctedData = { ...jsonData, correctedQuestions };
 fs.writeFileSync('corrected_data.json', JSON.stringify(correctedData, null, 2));
