@@ -1,0 +1,11 @@
+{
+  "name": "task_01",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.72.0",
+    "promptfoo": "^0.98.0"
+  }
+}

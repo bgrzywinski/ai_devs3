@@ -1,0 +1,34 @@
+description: "This is a test of the promptfoo library"
+
+prompts:
+  # Prompt 1
+  - id: prompt1
+    prompt:
+      'Write few sentences about Rafa Nadal'
+  # Prompt 2
+  - id: prompt2
+    prompt:
+      'Summarize the content from Prompt1: {{output_from_prompt1}} in {{language}}'
+  
+  
+
+providers:
+  - id: openai:chat:gpt-4o
+    config:
+      apiKey: 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
+  
+tests:
+  - vars:
+      language: Polish
+    steps:
+      - id: step1
+        prompt_id: prompt1
+      - id: step2
+        prompt_id: prompt2
+        vars:
+          output_from_prompt1: {{step1.output}}
+  
+
+
+  
+
