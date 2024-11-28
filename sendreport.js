@@ -7,7 +7,9 @@ dotenv.config();
 async function sendReport() {
   try {
     const reportData = fs.readFileSync('corrected_data.json', 'utf-8');
-    const apiKey = process.env.PERSONAL_API_KEY;
+    const jsonData = JSON.parse(reportData);
+    console.log(jsonData);
+    const personalApiKey = process.env.PERSONAL_API_KEY;
 
     const response = await fetch("https://centrala.ag3nts.org/report", {
       method: "POST",
@@ -15,10 +17,10 @@ async function sendReport() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-      task: "JSON",
-      apikey: apiKey,
-      answer: reportData,
-    }),
+        task: "JSON",
+        apikey: personalApiKey,
+        answer: jsonData.answer
+      }),
     });
 
     const responseText = await response.text();
@@ -37,6 +39,5 @@ async function sendReport() {
     console.error('Błąd podczas wysyłania raportu:', error);
   }
 }
-
 
 sendReport();

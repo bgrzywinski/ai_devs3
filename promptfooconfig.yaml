@@ -15,7 +15,7 @@ prompts:
 providers:
   - id: openai:chat:gpt-4o
     config:
-      apiKey: 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
+      apiKey: {{process.env.OPENAI_API_KEY}}
   
 tests:
   - vars:
