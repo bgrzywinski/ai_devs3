@@ -1,43 +1,42 @@
-import fs from 'fs';
+import { readFile } from 'fs/promises';
 import fetch from 'node-fetch';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 async function sendReport() {
-  try {
-    const reportData = fs.readFileSync('corrected_data.json', 'utf-8');
-    const jsonData = JSON.parse(reportData);
-    console.log(jsonData);
-    const personalApiKey = process.env.PERSONAL_API_KEY;
+    try {
+        // Read the report.json file
+        const reportData = await readFile('report.json', 'utf8');
+        const report = JSON.parse(reportData);
 
-    const response = await fetch("https://centrala.ag3nts.org/report", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        task: "JSON",
-        apikey: personalApiKey,
-        answer: jsonData.answer
-      }),
-    });
+        // Prepare the payload in the correct format
+        const payload = {
+            task: 'JSON',
+            apikey: 'd7ea8987-9b50-4b26-9a08-2ddea3e3dad6',
+            answer: report
+        };
 
-    const responseText = await response.text();
-    console.log('Response status:', response.status);
-    
-    if (response.ok) {
-      console.log('Raport został wysłany.');
-    } else {
-      console.error('Błąd podczas wysyłania raportu:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: responseText
-      });
+        // Send to centrala.ag3nts
+        const response = await fetch('https://centrala.ag3nts', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        console.log('Response status:', response.status);
+        
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`Server responded with ${response.status}: ${errorData}`);
+        }
+
+        console.log('Report successfully sent to centrala.ag3nts');
+
+    } catch (error) {
+        console.error('Error sending report:', error);
+        throw error;
     }
-  } catch (error) {
-    console.error('Błąd podczas wysyłania raportu:', error);
-  }
 }
 
-sendReport();
+// Execute the function
+sendReport().catch(console.error);
