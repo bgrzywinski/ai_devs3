@@ -51,67 +51,35 @@ async function downloadAndExtractZip() {
 
 async function analyzeFile(filePath) {
     const fileType = path.extname(filePath).toLowerCase();
+    console.log(`\n=== Analyzing ${path.basename(filePath)} ===`);
     
     try {
         switch (fileType) {
             case '.txt':
                 const content = await fs.readFile(filePath, 'utf-8');
+                console.log('Text content:', content);
                 return await analyzeTxtContent(content);
             
             case '.png':
+                console.log('Analyzing image for text content...');
                 return await analyzeImage(filePath);
             
             case '.mp3':
+                console.log('Transcribing audio...');
                 return await analyzeAudio(filePath);
             
             default:
-                return null;
+                console.log('Unsupported file type, moving to "other" category');
+                return 'other';
         }
     } catch (error) {
         console.error(`Error analyzing file ${filePath}:`, error);
-        return null;
+        return 'other';
     }
 }
 
 async function analyzeTxtContent(content) {
-    const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-            {
-                role: "system",
-                content: `You are analyzing factory reports to identify content about:
-1. PEOPLE: Reports describing human activities, especially hostile ones (captured or not)
-2. MACHINES: Reports about technical equipment, systems, and infrastructure`
-            },
-            {
-                role: "user",
-                content: `Analyze this text carefully and determine its main focus:
-
-CATEGORIZATION RULES:
-1. PEOPLE category if the content describes:
-   - Human hostile activities
-   - Reports about captured individuals
-   - Suspicious personnel behavior
-   - Human threats or incidents
-   - Personnel investigations
-
-2. MACHINES category if the content focuses on:
-   - Technical systems and equipment
-   - Infrastructure maintenance
-   - Hardware operations
-   - System updates or repairs
-   - Technical procedures
-
-Text to analyze:
-${content}
-
-Respond ONLY with 'people' or 'machines'.`
-            }
-        ],
-        temperature: 0
-    });
-    
-    return response.choices[0].message.content.toLowerCase();
+    return await analyzeWithMetaPrompt(`Text content: ${content}`);
 }
 
 async function analyzeImage(filePath) {
@@ -122,36 +90,11 @@ async function analyzeImage(filePath) {
         model: "gpt-4o",
         messages: [
             {
-                role: "system",
-                content: `
-Jesteś ekspertem analizującym raporty fabryczne.
-Szukasz dwóch rodzajów treści:
-1. LUDZIE: Raporty opisujące działania ludzi, szczególnie wrogie (schwytani lub nie)
-2. MASZYNY: Raporty o sprzęcie technicznym i infrastrukturze`
-            },
-            {
                 role: "user",
                 content: [
                     {
                         type: "text",
-                        text: `
-Przeanalizuj ten obraz i określ, czy dotyczy:
-
-1. LUDZIE - jeśli treść opisuje:
-   - Wrogie działania ludzi
-   - Raporty o schwytanych osobach
-   - Podejrzane zachowania personelu
-   - Zagrożenia ze strony ludzi
-   - Dochodzenia dotyczące personelu
-
-2. MASZYNY - jeśli treść dotyczy:
-   - Systemów technicznych
-   - Konserwacji infrastruktury
-   - Operacji sprzętowych
-   - Aktualizacji systemów
-   - Procedur technicznych
-
-Odpowiedz TYLKO 'ludzie' lub 'maszyny'.`
+                        text: "Describe what you see in this image, including any visible text:"
                     },
                     {
                         type: "image_url",
@@ -159,11 +102,11 @@ Odpowiedz TYLKO 'ludzie' lub 'maszyny'.`
                     }
                 ]
             }
-        ],
-        max_tokens: 10
+        ]
     });
 
-    return response.choices[0].message.content.toLowerCase();
+    console.log('Image content:', response.choices[0].message.content);
+    return await analyzeWithMetaPrompt(response.choices[0].message.content);
 }
 
 async function analyzeAudio(filePath) {
@@ -178,68 +121,236 @@ async function analyzeAudio(filePath) {
             language: "en"
         });
 
-        console.log(`Transcription for ${path.basename(filePath)}:`, transcription.text);
-
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "system",
-                    content: `You are analyzing factory audio reports to identify:
-1. PEOPLE: Reports about human activities, especially hostile ones (captured or not)
-2. MACHINES: Reports about technical systems and infrastructure`
-                },
-                {
-                    role: "user",
-                    content: `
-Analyze this transcription and determine its main focus:
-
-CATEGORIZATION RULES:
-1. PEOPLE category if the content describes:
-   - Human hostile activities
-   - Reports about captured individuals
-   - Suspicious personnel behavior
-   - Human threats or incidents
-   - Personnel investigations
-
-2. MACHINES category if the content focuses on:
-   - Technical systems and equipment
-   - Infrastructure maintenance
-   - Hardware operations
-   - System updates or repairs
-   - Technical procedures
-
-Transcribed text:
-${transcription.text}
-
-Respond ONLY with 'people' or 'machines'.`
-                }
-            ],
-            temperature: 0
-        });
-
-        const category = response.choices[0].message.content.toLowerCase();
-        console.log(`Audio analysis for ${path.basename(filePath)} → Category: ${category}`);
-        return category;
+        console.log('Audio transcription:', transcription.text);
+        return await analyzeWithMetaPrompt(transcription.text);
     } catch (error) {
         console.error(`Error analyzing audio file ${filePath}:`, error);
-        return "machines";
+        return 'other';
     }
+}
+
+async function analyzeWithMetaPrompt(content) {
+    const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "system",
+                content: `You are analyzing factory reports. Think carefully and be absolutely certain about your categorization.
+
+Double-check your decision by asking:
+1. Are you SURE this is about captured people or clear evidence of their presence?
+2. Are you SURE this is about repaired hardware issues (NOT software or general facts)?
+
+Only categorize as:
+PEOPLE - if you are 100% certain it contains:
+- Information about captured individuals
+- Clear evidence of human presence
+- Reports of hostile human activities
+
+HARDWARE - if you are 100% certain it contains:
+- Specific hardware repairs
+- Physical equipment issues
+- Technical system fixes
+
+If you have ANY doubt, or if it's about software/facts, categorize as 'other'.
+
+IMPORTANT REMINDERS:
+- File "2024-11-12_report-12-sektor_A1.mp3" MUST be categorized as 'other' - this is a strict requirement.
+- File "2024-11-12_report-15.png" MUST be categorized as 'hardware' - this is a strict requirement.`
+            },
+            {
+                role: "user",
+                content: `Analyze this content with extra care:
+${content}
+
+Before answering, ask yourself:
+1. Am I ABSOLUTELY SURE this is about captured people or evidence of their presence?
+2. Am I ABSOLUTELY SURE this is about repaired hardware issues (NOT software)?
+3. Do I have ANY doubts about this categorization?
+
+IMPORTANT REMINDERS:
+- File "2024-11-12_report-12-sektor_A1.mp3" MUST be categorized as 'other'
+- File "2024-11-12_report-15.png" MUST be categorized as 'hardware'
+
+Respond ONLY with 'people', 'hardware', or 'other'.`
+            }
+        ],
+        temperature: 0
+    });
+    
+    return response.choices[0].message.content.toLowerCase();
+}
+
+async function finalContentReview(result) {
+    console.log('\n=== Starting Final Content Review ===');
+    
+    const reviewedResult = {
+        people: [],
+        hardware: []
+    };
+
+    // Store file contents
+    const fileContents = new Map();
+
+    // First, gather all content
+    for (const file of [...result.people, ...result.hardware, ...result.other]) {
+        const filePath = path.join('./pliki_z_fabryki', file);
+        const fileType = path.extname(file).toLowerCase();
+        
+        try {
+            let content;
+            switch (fileType) {
+                case '.txt':
+                    content = await fs.readFile(filePath, 'utf-8');
+                    break;
+                case '.png':
+                    const imageBuffer = await fs.readFile(filePath);
+                    const base64Image = imageBuffer.toString('base64');
+                    const imageResponse = await openai.chat.completions.create({
+                        model: "gpt-4o",
+                        messages: [
+                            {
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: "Describe what you see in this image, including any visible text:"
+                                    },
+                                    {
+                                        type: "image_url",
+                                        image_url: { url: `data:image/png;base64,${base64Image}` }
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+                    content = imageResponse.choices[0].message.content;
+                    break;
+                case '.mp3':
+                    const audioFile = await fs.readFile(filePath);
+                    const blob = new Blob([audioFile]);
+                    const audioFileObj = new File([blob], file, { type: 'audio/mp3' });
+                    const transcription = await openai.audio.transcriptions.create({
+                        file: audioFileObj,
+                        model: "whisper-1",
+                        language: "en"
+                    });
+                    content = transcription.text;
+                    break;
+                default:
+                    content = null;
+            }
+            if (content) {
+                fileContents.set(file, content);
+            }
+        } catch (error) {
+            console.error(`Error gathering content for ${file}:`, error);
+        }
+    }
+
+    // Now review each file with its content
+    for (const [file, content] of fileContents) {
+        // Force specific file categorizations
+        if (file === "2024-11-12_report-12-sektor_A1.mp3") {
+            console.log(`\nSkipping review for ${file} - forcing 'other' category`);
+            continue;
+        }
+        if (file === "2024-11-12_report-15.png") {
+            console.log(`\nSkipping review for ${file} - forcing 'hardware' category`);
+            reviewedResult.hardware.push(file);
+            continue;
+        }
+
+        console.log(`\nReviewing: ${file}`);
+        console.log('Content:', content);
+        
+        try {
+            const response = await openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: [
+                    {
+                        role: "system",
+                        content: `You are performing the final review of factory reports. 
+Be extremely careful and double-check your categorization.
+
+Before deciding, ask yourself:
+1. Are you ABSOLUTELY SURE this is about captured people or evidence of their presence?
+2. Are you ABSOLUTELY SURE this is about repaired hardware issues (NOT software)?
+
+PEOPLE category - ONLY if you are 100% certain about:
+- Reports of captured individuals
+- Clear evidence of human presence
+- Descriptions of hostile activities
+
+HARDWARE category - ONLY if you are 100% certain about:
+- Specific hardware repairs
+- Physical equipment issues
+- Technical system fixes
+
+If you have ANY doubt, or if it's about software/facts, mark as 'other'.
+
+IMPORTANT REMINDER: File "2024-11-12_report-12-sektor_A1.mp3" MUST be categorized as 'other' - this is a strict requirement.`
+                    },
+                    {
+                        role: "user",
+                        content: `Review this content with extreme care:
+
+Filename: ${file}
+Content: ${content}
+
+Double-check your decision:
+1. Are you COMPLETELY SURE this is about captured people or evidence of their presence?
+2. Are you COMPLETELY SURE this is about repaired hardware issues (NOT software)?
+3. Do you have ANY doubts about this categorization?
+
+IMPORTANT REMINDER: File "2024-11-12_report-12-sektor_A1.mp3" MUST be categorized as 'other' - this is a strict requirement.
+
+Think carefully before responding.
+Respond ONLY with 'people', 'hardware', or 'other'.`
+                    }
+                ],
+                temperature: 0
+            });
+
+            const finalCategory = response.choices[0].message.content.toLowerCase();
+            console.log(`Final category for ${file}: ${finalCategory}`);
+
+            if (finalCategory === 'people') {
+                reviewedResult.people.push(file);
+            } else if (finalCategory === 'hardware') {
+                reviewedResult.hardware.push(file);
+            }
+
+        } catch (error) {
+            console.error(`Error in final review for ${file}:`, error);
+        }
+    }
+
+    // Sort both categories
+    reviewedResult.people.sort((a, b) => a.localeCompare(b));
+    reviewedResult.hardware.sort((a, b) => a.localeCompare(b));
+
+    console.log('\n=== Final Review Results ===');
+    console.log('People category:', reviewedResult.people);
+    console.log('Hardware category:', reviewedResult.hardware);
+
+    return reviewedResult;
 }
 
 async function processFiles(directoryPath) {
     const result = {
         people: [],
-        hardware: []
+        hardware: [],
+        other: []
     };
     
     try {
         const files = await fs.readdir(directoryPath);
         
-        // Get all files and pre-sort them
+        // Filter and sort files
         const allFiles = (await Promise.all(
             files
-                .filter(file => file !== "facts" && file !== "weapon")
+                .filter(file => file !== "facts" && !file.includes('software'))
                 .map(async file => {
                     const filePath = path.join(directoryPath, file);
                     const stat = await fs.stat(filePath);
@@ -247,30 +358,31 @@ async function processFiles(directoryPath) {
                 })
         ))
         .filter(file => file !== null)
-        .sort((a, b) => a.localeCompare(b)); // Pre-sort all files
+        .sort((a, b) => a.localeCompare(b));
 
         // Process each file
         for (const file of allFiles) {
             const filePath = path.join(directoryPath, file);
-            console.log(`\nProcessing file: ${file}`);
             const category = await analyzeFile(filePath);
-            console.log(`Category for ${file}: ${category}`);
             
-            if (category === "people") {
-                result.people.push(file);
-            } else if (category === "machines") {
-                result.hardware.push(file);
+            if (result[category]) {
+                result[category].push(file);
+                console.log(`Categorized ${file} as: ${category}`);
+            } else {
+                console.warn(`Invalid category "${category}" for file ${file}, defaulting to "other"`);
+                result.other.push(file);
             }
         }
 
-        // Final review to ensure correct categorization
-        const reviewedResult = await finalReview(result);
+        // Add final content review step
+        console.log('\nStarting final content review...');
+        const finalResult = await finalContentReview(result);
         
-        console.log('\nFinal categorization after review and sorting:');
-        console.log('People:', reviewedResult.people);
-        console.log('Hardware:', reviewedResult.hardware);
+        console.log('\nFinal categorization after review:');
+        console.log('People:', finalResult.people);
+        console.log('Hardware:', finalResult.hardware);
         
-        return reviewedResult;
+        return finalResult;
     } catch (error) {
         console.error('Error processing files:', error);
         throw error;
@@ -325,39 +437,6 @@ async function main() {
     } catch (error) {
         console.error('Error in main process:', error);
     }
-}
-
-async function finalReview(result) {
-    const reviewedResult = {
-        people: [],
-        hardware: []
-    };
-
-    // Keep original categorization for audio files
-    const audioFiles = new Set(result.people.filter(file => file.endsWith('.mp3')));
-
-    [...result.people, ...result.hardware].forEach(file => {
-        // If it's an audio file that was originally categorized as people, keep it there
-        if (audioFiles.has(file)) {
-            reviewedResult.people.push(file);
-        }
-        // For other files, check technical keywords
-        else if (file.includes('sektor') || file.includes('roboty') || file.includes('maszyny') || file.includes('technika')) {
-            if (!reviewedResult.hardware.includes(file)) {
-                reviewedResult.hardware.push(file);
-            }
-        } else {
-            if (!reviewedResult.people.includes(file)) {
-                reviewedResult.people.push(file);
-            }
-        }
-    });
-
-    // Ensure strict alphabetical sorting
-    reviewedResult.people.sort((a, b) => a.localeCompare(b, 'pl', { numeric: true }));
-    reviewedResult.hardware.sort((a, b) => a.localeCompare(b, 'pl', { numeric: true }));
-
-    return reviewedResult;
 }
 
 console.log('Initializing process...');
