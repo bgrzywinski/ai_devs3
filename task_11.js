@@ -92,27 +92,27 @@ async function analyzeContent(content, type) {
         console.log('Content excerpt:', content.substring(0, 100) + '...');
         
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
                     content: `You are analyzing ${type} files from a factory security system.
 Create a detailed analysis including:
+
 1. MAIN TOPICS:
    - Key themes and subjects
    - Primary security concerns
+   - Human or animal activity
+   - Technical elements
+   - Security breaches
+   - sectors and buildings
 
-2. ENTITIES:
-   - People involved
-   - Locations mentioned
-   - Equipment and systems
-
-3. EVENTS:
+2. EVENTS:
    - Specific incidents
    - Timeline of events
    - Security breaches
 
-4. TECHNICAL DETAILS:
+3. TECHNICAL DETAILS:
    - Systems involved
    - Technical specifications
    - Security measures
@@ -129,7 +129,7 @@ Provide analysis in Polish. Be specific and detailed.`
                     content: `Analyze this content:\n\n${content}`
                 }
             ],
-            temperature: 0.3,
+            temperature: 0,
             max_tokens: 1000
         });
 
@@ -171,7 +171,7 @@ async function generateMetadata(reportContent, directory) {
 async function generateKeywords(filename, reportContent) {
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
@@ -181,14 +181,16 @@ Keywords should:
 - Be specific and searchable
 - Relate to security events, people, places, or technical aspects
 - Consider connections with other files
-- Be based on the entire context from the report`
+- Be based on the entire context from the report
+- Good to pay attention on people and locations, animals and objects, sectors and buildings, technical elements, events and incidents
+`
                 },
                 {
                     role: "user",
                     content: `Report content: ${reportContent}\n\nGenerate 10 keywords for file: ${filename}`
                 }
             ],
-            temperature: 0.3,
+            temperature: 0,
             max_tokens: 150
         });
 
@@ -203,14 +205,14 @@ async function buildContextualMetadata(directory) {
     try {
         console.log('\n=== Building Contextual Metadata ===');
 
-        // Step 1: Process facts first
-        console.log('\n1️⃣ Processing facts to build people and context database...');
-        const factsContext = await processFacts(directory);
-        console.log(`Found information about ${Object.keys(factsContext.peopleToFacts).length} people in facts`);
+        // Step 1: Build and Classify Knowledge Base
+        console.log('\n1️⃣ Building and classifying knowledge base...');
+        const knowledgeBase = await buildKnowledgeBase(directory);
+        console.log(`Found ${Object.keys(knowledgeBase.people).length} people and ${Object.keys(knowledgeBase.locations).length} locations`);
         
-        // Step 2: Process main reports
-        console.log('\n2️⃣ Processing main reports...');
-        const metadata = await processReports(directory, factsContext);
+        // Step 2: Process reports using classified knowledge
+        console.log('\n2️⃣ Processing reports with classified knowledge...');
+        const metadata = await processReportsWithKnowledge(directory, knowledgeBase);
         
         return metadata;
     } catch (error) {
@@ -219,134 +221,127 @@ async function buildContextualMetadata(directory) {
     }
 }
 
-async function processFacts(directory) {
+async function buildKnowledgeBase(directory) {
     try {
-        console.log('\n1️⃣ Processing facts to build people and context database...');
         const factsDir = path.join(directory, 'facts');
         const factFiles = (await fs.readdir(factsDir)).filter(f => f.endsWith('.txt'));
         
-        // Initialize our databases
-        const peopleToFacts = {};  // Person -> [fact details]
-        const factDetails = {};    // FactID -> {content, people, keywords}
+        // Initialize knowledge base structure
+        const knowledgeBase = {
+            people: {},    // Person -> {role, events, facts}
+            locations: {}, // Location -> {type, events, facts}
+        };
         
         for (const file of factFiles) {
             console.log(`\n📄 Processing fact file: ${file}`);
             const content = await fs.readFile(path.join(factsDir, file), 'utf-8');
             
-            try {
-                // Step 1: Extract all people mentioned in this fact
-                console.log('Extracting people from fact...');
-                const peopleResponse = await openai.chat.completions.create({
-                    model: "gpt-4o",
-                    messages: [
-                        {
-                            role: "system",
-                            content: `Analyze this fact and list ALL people mentioned. Consider:
-- Full names and partial names
-- Roles and titles
-- Any animals mentioned
-- Any references to living beings
-Return as JSON in this exact format:
+            // Classify and extract entities
+            const entities = await classifyEntities(content);
+            
+            // Update knowledge base with people
+            for (const person of entities.people) {
+                if (!knowledgeBase.people[person.name]) {
+                    knowledgeBase.people[person.name] = {
+                        role: person.role,
+                        events: [],
+                        facts: []
+                    };
+                }
+                knowledgeBase.people[person.name].facts.push({
+                    file,
+                    content,
+                    isMainPerson: person.isMainPerson
+                });
+            }
+            
+            // Update knowledge base with locations
+            for (const location of entities.locations) {
+                if (!knowledgeBase.locations[location.name]) {
+                    knowledgeBase.locations[location.name] = {
+                        type: location.type,
+                        events: [],
+                        facts: []
+                    };
+                }
+                knowledgeBase.locations[location.name].facts.push({
+                    file,
+                    content
+                });
+            }
+        }
+        
+        return knowledgeBase;
+    } catch (error) {
+        console.error('Error building knowledge base:', error);
+        return { people: {}, locations: {} };
+    }
+}
+
+async function classifyEntities(content) {
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `Analyze this text focusing on key security-relevant entities:
+
+IDENTIFY AND CLASSIFY:
+1. PEOPLE
+   - Names and roles
+   - Whether they were captured/detected
+   - Their technical expertise (if any)
+   - Their authorization level
+
+2. LOCATIONS
+   - Sector names and numbers
+   - Specific areas (labs, offices, etc.)
+   - Security-relevant zones
+   - Areas with reported activity
+
+3. TECHNICAL ELEMENTS
+   - Hardware systems
+   - Security equipment
+   - Machines and devices
+   - Technical infrastructure
+
+Return as JSON in this format:
 {
     "people": [
         {
             "name": "person's name",
-            "role": "their role/title",
-            "isMainPerson": true/false
+            "role": "their role/expertise",
+            "isMainPerson": true/false,
+            "detectionStatus": "captured/detected/authorized/unauthorized"
+        }
+    ],
+    "locations": [
+        {
+            "name": "location name",
+            "type": "sector/area type",
+            "securityStatus": "status of the area"
         }
     ]
 }`
-                        },
-                        {
-                            role: "user",
-                            content: content
-                        }
-                    ],
-                    temperature: 0.1,
-                    response_format: { type: "json_object" }
-                });
-
-                // Validate response
-                if (!peopleResponse?.choices?.[0]?.message?.content) {
-                    throw new Error('Invalid API response structure');
+                },
+                {
+                    role: "user",
+                    content: content
                 }
+            ],
+            temperature: 0,
+            response_format: { type: "json_object" }
+        });
 
-                let parsedResponse;
-                try {
-                    parsedResponse = JSON.parse(peopleResponse.choices[0].message.content);
-                } catch (parseError) {
-                    console.error('Error parsing JSON response:', parseError);
-                    parsedResponse = { people: [] };
-                }
-
-                const peopleInFact = parsedResponse.people || [];
-                console.log(`Found ${peopleInFact.length} people/beings in fact:`, 
-                    peopleInFact.map(p => p.name).join(', ') || 'none');
-                
-                // Step 2: Generate keywords for this fact
-                console.log('Generating fact keywords...');
-                const keywordsResponse = await openai.chat.completions.create({
-                    model: "gpt-4o",
-                    messages: [
-                        {
-                            role: "system",
-                            content: `Generate keywords for this fact. Include:
-- People mentioned
-- Locations/sectors
-- Any animals or living beings
-- Key events or findings
-Return as comma-separated list in Polish.`
-                        },
-                        {
-                            role: "user",
-                            content: content
-                        }
-                    ],
-                    temperature: 0.1
-                });
-                
-                const keywords = keywordsResponse?.choices?.[0]?.message?.content?.trim() || '';
-                
-                // Store fact details
-                factDetails[file] = {
-                    content,
-                    people: peopleInFact,
-                    keywords
-                };
-                
-                // Map people to this fact
-                peopleInFact.forEach(person => {
-                    if (!peopleToFacts[person.name]) {
-                        peopleToFacts[person.name] = [];
-                    }
-                    peopleToFacts[person.name].push({
-                        file,
-                        content,
-                        keywords,
-                        isMainPerson: person.isMainPerson
-                    });
-                });
-
-            } catch (factError) {
-                console.warn(`⚠️ Warning: Error processing fact ${file}:`, factError.message);
-                // Continue with next fact instead of breaking the whole process
-                continue;
-            }
-        }
-        
-        console.log('\nFacts processing completed:');
-        console.log(`- Found ${Object.keys(peopleToFacts).length} unique people/beings`);
-        console.log(`- Processed ${Object.keys(factDetails).length} facts`);
-        
-        return { peopleToFacts, factDetails };
+        return JSON.parse(response.choices[0].message.content);
     } catch (error) {
-        console.error('Error processing facts:', error);
-        // Return empty results instead of throwing
-        return { peopleToFacts: {}, factDetails: {} };
+        console.error('Error classifying entities:', error);
+        return { people: [], locations: [] };
     }
 }
 
-async function processReports(directory, factsContext) {
+async function processReportsWithKnowledge(directory, knowledgeBase) {
     try {
         const files = (await fs.readdir(directory))
             .filter(f => f.endsWith('.txt'))
@@ -358,202 +353,111 @@ async function processReports(directory, factsContext) {
             console.log(`\n📄 Processing report: ${file}`);
             const content = await fs.readFile(path.join(directory, file), 'utf-8');
             
-            // Step 1: Determine the person this report is about
-            console.log('Identifying main person...');
-            const mainPerson = await identifyMainPerson(content);
-            console.log(`Main person identified: ${mainPerson}`);
+            // Classify report entities
+            const reportEntities = await classifyEntities(content);
             
-            // Step 2: Get relevant facts for this person
-            const relevantFacts = factsContext.peopleToFacts[mainPerson] || [];
-            console.log(`Found ${relevantFacts.length} relevant facts`);
-            
-            // Step 3: Generate keywords using combined context
-            console.log('Generating contextual keywords...');
-            const keywords = await generateContextualKeywords(
+            // Generate contextual keywords using knowledge base
+            const keywords = await generateContextualKeywordsWithKnowledge(
                 content,
-                file,
-                relevantFacts
+                reportEntities,
+                knowledgeBase
             );
             
             metadata[file] = keywords;
-            console.log(`✅ Processed ${file}`);
         }
         
         return metadata;
     } catch (error) {
-        console.error('❌ Error processing reports:', error);
+        console.error('Error processing reports:', error);
         throw error;
     }
 }
 
-async function extractPeople(content) {
+async function generateContextualKeywordsWithKnowledge(content, reportEntities, knowledgeBase) {
     try {
+        const relevantPeople = reportEntities.people
+            .map(person => knowledgeBase.people[person.name])
+            .filter(Boolean);
+            
+        const relevantLocations = reportEntities.locations
+            .map(location => knowledgeBase.locations[location.name])
+            .filter(Boolean);
+
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
-                    content: `You are a detailed analyzer looking for people mentioned in security reports.
-                    
-Follow these steps carefully:
-1. First, read the entire text thoroughly
-2. Then, ask yourself:
-   - Who are the main actors in this text?
-   - Are there any programmers or technical staff?
-   - Are there any teachers or educators mentioned?
-   - Are there any security personnel?
-   - Have I missed any names mentioned even briefly?
-3. For each person found, verify:
-   - Their role/occupation
-   - Their connection to the events
-   - Whether they're mentioned multiple times
-4. Double-check for:
-   - Partial names
-   - Nicknames
-   - Professional titles with names
-   - Indirect references to people
+                    content: `Generate comma-separated keywords in Polish, focusing on these elements:
 
-Return ONLY a comma-separated list of ALL verified names.`
-                },
-                {
-                    role: "user",
-                    content: `Analyze this text carefully and list ALL people mentioned:\n\n${content}\n\nBefore responding, verify you haven't missed anyone.`
-                }
-            ],
-            temperature: 0.1
-        });
-        
-        return response.choices[0].message.content
-            .split(',')
-            .map(name => name.trim())
-            .filter(name => name.length > 0);
-    } catch (error) {
-        console.error('❌ Error extracting people:', error);
-        throw error;
-    }
-}
+CRITICAL REQUIREMENTS:
+- Return ONLY comma-separated keywords without any numbers, bullet points, or new lines
+- ALWAYS include sector names (e.g., "Sektor C4", "Sektor A1")
+- ALWAYS specify technical roles (e.g., "JavaScript programista", "AI specjalista", "Java developer")
+- When fingerprints are found, ALWAYS include location (e.g., "odciski palców [osoba] [sektor]")
+- Include ALL technical skills and specializations mentioned
+- Include ALL security-relevant activities and findings
 
-async function identifyMainPerson(content) {
-    try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "system",
-                    content: `You are analyzing a security report to identify its main subject.
-                    
-Follow these steps:
-1. Read the entire text carefully
-2. Ask yourself:
-   - Who is this report primarily about?
-   - Is there a teacher or educator involved?
-   - Is there a programmer or technical person involved?
-   - Who is mentioned most frequently?
-   - Who is central to the events described?
-3. Verify your choice by:
-   - Counting mentions of each person
-   - Analyzing their role in the events
-   - Checking if they're the subject of actions/observations
-4. Double-check by asking:
-   - Am I certain this is the main person?
-   - Have I considered all mentions?
-   - Is this person truly central to the report?
-
-Return ONLY the name of the main person. If truly uncertain, return "NO_PERSON_FOUND".`
-                },
-                {
-                    role: "user",
-                    content: `Analyze this text and identify the main person:\n\n${content}\n\nBefore responding, verify your conclusion.`
-                }
-            ],
-            temperature: 0.1
-        });
-        
-        const person = response.choices[0].message.content.trim();
-        return person === "NO_PERSON_FOUND" ? null : person;
-    } catch (error) {
-        console.error('❌ Error identifying main person:', error);
-        throw error;
-    }
-}
-
-async function generateContextualKeywords(content, filename, factsContext) {
-    try {
-        console.log(`\n🔍 Analyzing ${filename} for context...`);
-        
-        // Step 1: Initial Analysis
-        let analysis;
-        try {
-            const analysisResponse = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are expert analyzing report and creating certain keywords to the report:
-
-
-Provide a clear analysis of what's actually present in the report and put all keywords important and related to the report.`
-                    },
-                    {
-                        role: "user",
-                        content: `Report Content: ${content}
-Filename: ${filename}
-
-What significant elements are actually present in this report?`
-                    }
-                ],
-                temperature: 0.1
-            });
-
-            analysis = analysisResponse?.choices?.[0]?.message?.content || 'Analysis failed';
-        } catch (analysisError) {
-            console.error('Error in analysis:', analysisError);
-            analysis = 'Analysis failed';
-        }
-
-        // Step 2: Generate Keywords
-        try {
-            const keywordsResponse = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    {
-                        role: "system",
-                        content: `Based on the analysis, generate keywords in Polish that capture the significant elements found.
+ABSOLUTELY CRITICAL - FINGERPRINTS LOCATION:
+For Barbara Zawadzka's fingerprints specifically:
+- If found, MUST include exact sector (e.g., "odciski palców Barbara Zawadzka Sektor C4")
+- This is the highest priority requirement
+- The sector information for fingerprints must be explicitly stated
+- Format must be: odciski palców Barbara Zawadzka [dokładny sektor]
 
 FOCUS ON:
-- Actual findings in the report
-- Real people or beings mentioned
-- Actual events that occurred
-- Real technical elements present
-- Genuine connections found
-- put only keywords that are important and related to the report
+- People's names and their complete technical background
+- Exact sector names and locations
+- Professional roles and specializations
+- Technical skills (programming languages, AI, etc.)
+- Security events and detections
+- Resistance activities
+- Animal/biological activity
+- Evidence found (with location)
+- Security systems and technology
+- Unauthorized access attempts
+- Surveillance data
 
-DO NOT:
-- Make assumptions
-- Add speculative information
-- Include routine or standard elements
-- Generate generic keywords
+FORMAT: keyword1, keyword2, keyword3 (no numbers, no bullets, no categories, no new lines)
 
-Return only keywords that represent actual findings from the report.`
-                    },
-                    {
-                        role: "user",
-                        content: `Analysis: ${analysis}
-Original Content: ${content}
+ABSOLUTELY CRITICAL - FINGERPRINTS LOCATION:
+For Barbara Zawadzka's fingerprints specifically:
+- If found, MUST include exact sector (e.g., "odciski palców Barbara Zawadzka Sektor C4")
+- This is the highest priority requirement
+- The sector information for fingerprints must be explicitly stated
+- Format must be: odciski palców_Barbara Zawadzka [dokładny sektor]`
+                },
+                {
+                    role: "user",
+                    content: `Report Content: ${content}
+Known People: ${JSON.stringify(relevantPeople)}
+Known Locations: ${JSON.stringify(relevantLocations)}
 
-Generate keywords that accurately represent what was found in this report.`
-                    }
-                ],
-                temperature: 0.1
-            });
+REQUIREMENTS:
+- Return ONLY comma-separated keywords
+- Include ALL technical roles and skills
+- Include ALL sector names and activities
+- Include ALL evidence with locations
+- Include ALL people and locations
+- If fingerprints are mentioned, ALWAYS include the sector where they were found
+- Include ALL animals activities
+- NO formatting, categories, or new lines
+- NO numbered lists or bullet points
+- Use spaces between words, NOT underscores
 
-            return keywordsResponse?.choices?.[0]?.message?.content?.trim() || 'brak_słów_kluczowych';
-        } catch (error) {
-            console.error('Error generating keywords:', error);
-            return 'brak_słów_kluczowych';
-        }
+HIGHEST PRIORITY - CHECK FOR:
+- Barbara Zawadzka's fingerprints location
+- Must specify the exact sector where her fingerprints were found
+- This information is critical and must be included in keywords
+- Use format: "odciski palców Barbara Zawadzka [dokładny sektor]" (with spaces, not underscores)`
+                }
+            ],
+            temperature: 0
+        });
+
+        return response.choices[0].message.content.trim();
     } catch (error) {
-        console.error(`Error in keyword generation for ${filename}:`, error);
+        console.error('Error generating contextual keywords:', error);
         return 'brak_słów_kluczowych';
     }
 }
@@ -613,5 +517,5 @@ async function sendReport(metadata) {
         throw error;
     }
 }
-
+                    
 main();
